@@ -8,10 +8,10 @@ Bundle-Localization: plugin
 Bundle-RequiredExecutionEnvironment: JavaSE-1.6
 Require-Bundle: org.eclipse.ui,
  org.eclipse.core.runtime,
- com.archimatetool.editor
+ com.archimatetool.editor,
+ org.eclipse.jgit;bundle-version="3.3.1",
+ org.junit;bundle-version="4.10.0"
 Export-Package: nz.co.cyma.integrations.archigitsync.plugin,
  nz.co.cyma.integrations.archigitsync.plugin.git
-Bundle-ClassPath: lib/org.eclipse.jgit-3.1.0.201310021548-r.jar,
- lib/snakeyaml-1.11.jar,
- lib/jsch-0.1.50.jar,
+Bundle-ClassPath: lib/jsch-0.1.50.jar,
  .

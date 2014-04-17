@@ -51,6 +51,9 @@ import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IDiagramModelReference;
 import com.archimatetool.model.IDocumentable;
 import com.archimatetool.model.IFolder;
+import com.archimatetool.model.IIdentifier;
+import com.archimatetool.model.INameable;
+import com.archimatetool.model.IProperties;
 import com.archimatetool.model.IProperty;
 import com.archimatetool.model.IRelationship;
 import com.archimatetool.model.ITextContent;
@@ -264,213 +267,197 @@ public class LocalRepositoryImport implements IModelImporter {
     				break;
     			case RELATIONSHIPS:
     				relationshipObjects = YamlReader.readDirectoryVersionObjects(dir);
-    				this.createModelRelationships(model, relationshipObjects);
+    				this.createModelObjects(model, relationshipObjects);
     				break;
     			case DERIVED_RELATIONSHIPS:
     				derivedRelationshipObjects = YamlReader.readDirectoryVersionObjects(dir);
-    				this.createModelRelationships(model, derivedRelationshipObjects);
+    				this.createModelObjects(model, derivedRelationshipObjects);
     				break;
     			case DIAGRAMS:
     				diagramObjects = YamlReader.readDirectoryVersionObjects(dir);
-    				this.createModelDiagrams(model, diagramObjects);
+    				this.createModelObjects(model, diagramObjects);
     				break;
     		}
     	}
     }
     
-    private void createModelObjects(IArchimateModel model, Map objects) {
+    void createModelObjects(IArchimateModel model, Map objects) {
+		List diagramRefList = new ArrayList();
+		Map diagramModelMap = new HashMap();
+		String folderString;
+		IFolder typeFolder;
+		
     	for(Object objectKey: objects.keySet()) {
     		String elementId = (String) objectKey;
     		Map objectFeatureMap = (Map) objects.get(elementId);
     		
-    		IArchimateElement element = (IArchimateElement)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)objectFeatureMap.get(VersionElementAttribute.ELEMENT_TYPE.getKeyName())));
-    		element.setId((String)objectFeatureMap.get(VersionElementAttribute.ID.getKeyName()));
-    		element.setName((String)objectFeatureMap.get(VersionElementAttribute.NAME.getKeyName()));
-    		element.setDocumentation((String)objectFeatureMap.get(VersionElementAttribute.DOCUMENTATION.getKeyName()));
+    		EObject object = createObjectFromFeatureMap(objectFeatureMap);
     		
-    		List elementProperties = (ArrayList)objectFeatureMap.get(VersionElementAttribute.PROPERTIES.getKeyName());
-    		element.getProperties().addAll(elementProperties);
+    		folderString = (String)objectFeatureMap.get(VersionElementAttribute.FOLDER_PATH.getKeyName());
+    		typeFolder = model.getDefaultFolderForElement(object);
     		
-    		String folderString = (String)objectFeatureMap.get(VersionElementAttribute.FOLDER_PATH.getKeyName());
-    		IFolder typeFolder = model.getDefaultFolderForElement(element);
-    		
-    		//put objects in folders if needs be
-    		handleFolders(folderString, typeFolder, element);	
-    		
-    		//put the element into a map so we can reference it
-    		this.modelElements.put(element.getId(), element);
-    		
- 
-    	}
-
-    }
-    
-    
-    private void createModelRelationships(IArchimateModel model, Map objects) {
-    	//it's optional, but easier to always create a derived relations folder
-    	IFolder derivedRelations = model.addDerivedRelationsFolder();
-    	
-    	for(Object objectKey: objects.keySet()) {
-    		String elementId = (String) objectKey;
-    		Map objectFeatureMap = (Map) objects.get(elementId);
-    		
-    		IRelationship relationship = (IRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)objectFeatureMap.get(VersionElementAttribute.ELEMENT_TYPE.getKeyName())));
-    		relationship.setId((String)objectFeatureMap.get(VersionElementAttribute.ID.getKeyName()));
-    		relationship.setName((String)objectFeatureMap.get(VersionElementAttribute.NAME.getKeyName()));
-    		relationship.setDocumentation((String)objectFeatureMap.get(VersionElementAttribute.DOCUMENTATION.getKeyName()));
-    		
-    		List elementProperties = (ArrayList)objectFeatureMap.get(VersionElementAttribute.PROPERTIES.getKeyName());
-    		relationship.getProperties().addAll(elementProperties);
-    		
-    		//relationships
-    		IArchimateElement source = (IArchimateElement) modelElements.get(objectFeatureMap.get(VersionRelationshipAttribute.SOURCE_ELEMENT.getKeyName()));
-    		relationship.setSource(source);
-    		
-       		IArchimateElement target = (IArchimateElement) modelElements.get(objectFeatureMap.get(VersionRelationshipAttribute.TARGET_ELEMENT.getKeyName()));
-    		relationship.setTarget(target);
-    		
-    		String folderString = (String)objectFeatureMap.get(VersionElementAttribute.FOLDER_PATH.getKeyName());
-    		IFolder typeFolder = model.getDefaultFolderForElement(relationship);
-    		String relationType = (String)objectFeatureMap.get(VersionElementAttribute.TYPE.getKeyName());
-    		if(relationType.equals("derived")) {
-    			typeFolder = derivedRelations;
+    		if(object instanceof IRelationship) {
+    			IFolder derivedRelations = model.addDerivedRelationsFolder();
+    			IRelationship relationship = (IRelationship) object;
+    			
+    			typeFolder = handleRelationshipSpecifics(derivedRelations,
+    					objectFeatureMap, relationship, model);
+    			
+    			modelRelationships.put(relationship.getId(), relationship);
+    			
+    		} else if(object instanceof IArchimateElement) {
+    			IArchimateElement element = (IArchimateElement)object;
+    			
+        		this.modelElements.put(element.getId(), element);
+    		} else if(object instanceof IArchimateDiagramModel) {
+				IArchimateDiagramModel diagram = (IArchimateDiagramModel)object;
+				handleDiagramSpecifics(model,
+						diagramRefList, diagramModelMap, objectFeatureMap,
+						diagram);
+				
+    		} else {
+    			throw new IllegalArgumentException();
     		}
-    		
-    		//relationship type specific
-    		if (relationship instanceof IAccessRelationship) {
-    			IAccessRelationship accessRel = (IAccessRelationship) relationship;
-    			if ((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName()) !=null && ((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName())).containsKey(VersionRelationshipAttribute.ACCESS_TYPE.getKeyName())) {
-    				int accessType = Integer.parseInt((String)((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName())).get(VersionRelationshipAttribute.ACCESS_TYPE.getKeyName()));
-    				accessRel.setAccessType(accessType);
-    			}
-    		}
-    		
     		//handle folders if needs be
-    		handleFolders(folderString, typeFolder, relationship);	
-    		
-    		
-    		modelRelationships.put(relationship.getId(), relationship);
+    		handleFolders(folderString, typeFolder, object);	
     	}
-    	
-    	
-    	//
+		updateDiagramModelReferences(diagramRefList, diagramModelMap);
     }
+
+	private void handleDiagramSpecifics(IArchimateModel model,
+			List diagramRefList, Map diagramModelMap, Map objectFeatureMap,
+			IArchimateDiagramModel diagram) {
+		diagram.setConnectionRouterType(this.getSafeFeatureValue(objectFeatureMap, VersionDiagramFeatureAttribute.DIAGRAM_CONNECTION_ROUTER.getKeyName()));
+		
+		//first handle diagram elements
+		ArchimateFactory f = new ArchimateFactory();
+		Map diagramElements = (Map)objectFeatureMap.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_MAP.getKeyName());
+		Map<String, Object> archiDiagramObjects = new HashMap();
+		
+		for(Object objectId: diagramElements.keySet()) {
+			Map diagramElement = (Map) diagramElements.get(objectId);
+			IDiagramModelArchimateObject archiDiagramObject = f.createDiagramModelArchimateObject();
+			
+			archiDiagramObject.setId((String) objectId);
+			archiDiagramObject.setArchimateElement((IArchimateElement)modelElements.get((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_OBJECT_ID.getKeyName())));
+			archiDiagramObject.setBounds(
+					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_X.getKeyName()), 
+					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_Y.getKeyName()), 
+					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_WIDTH.getKeyName()), 
+					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_HEIGHT.getKeyName()));
+		
+			archiDiagramObject.setFillColor((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FILL_COLOUR.getKeyName()));
+			archiDiagramObject.setFont((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT.getKeyName()));
+			archiDiagramObject.setFontColor((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT_COLOUR.getKeyName()));
+			archiDiagramObject.setTextAlignment(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_ALIGNMENT.getKeyName()));
+			archiDiagramObject.setTextPosition(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_POSITION.getKeyName()));
+			archiDiagramObject.setType(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_REPRESENTATION_TYPE.getKeyName()));
+			
+			diagram.getChildren().add(archiDiagramObject);
+			archiDiagramObjects.put((String)objectId, archiDiagramObject);
+		}
+		
+		
+		
+		//Now handle diagram specific elements
+		Map diagramSpecificElements = (Map)objectFeatureMap.get(VersionDiagramFeatureAttribute.DIAGRAM_SPECIFIC_OBJECT_MAP.getKeyName());
+		Map<String, IDiagramModelObject> archiDiagramSpecificObjects = new HashMap();
+		
+		for(Object objectId: diagramSpecificElements.keySet()) {
+			Map diagramSpecificElement = (Map) diagramSpecificElements.get(objectId);
+			IDiagramModelObject archiDiagramSpecificObject = (IDiagramModelObject)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_TYPE.getKeyName())));
+			archiDiagramSpecificObject.setId((String)objectId);
+			archiDiagramSpecificObject.setBounds(
+					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_X.getKeyName()), 
+					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_Y.getKeyName()), 
+					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_WIDTH.getKeyName()), 
+					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_HEIGHT.getKeyName()));
+			
+			archiDiagramSpecificObject.setFillColor((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FILL_COLOUR.getKeyName()));
+			archiDiagramSpecificObject.setFont((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT.getKeyName()));
+			archiDiagramSpecificObject.setFontColor((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT_COLOUR.getKeyName()));
+			archiDiagramSpecificObject.setTextAlignment(this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_ALIGNMENT.getKeyName()));
+			//TODO something not right with text alignment
+			archiDiagramSpecificObject.setTextPosition(this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_POSITION.getKeyName()));
+			archiDiagramSpecificObject.setName((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_NAME.getKeyName()));
+			
+			if(archiDiagramSpecificObject instanceof IDiagramModelGroup)
+				 ((IDocumentable) archiDiagramSpecificObject).setDocumentation((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_DOCUMENTATION.getKeyName()));
+			else if (archiDiagramSpecificObject instanceof IDiagramModelNote)
+				 ((ITextContent) archiDiagramSpecificObject).setContent((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_DOCUMENTATION.getKeyName()));
+			//if it's a diagram reference we need to add it to a list so we can update it after we've gone through all the diagrams
+			else if (archiDiagramSpecificObject instanceof IDiagramModelReference)
+			{
+				Object[] info = new Object[2];
+				info[0] = (IDiagramModelReference) archiDiagramSpecificObject;
+				info[1] = (String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_REFERENCE_ID.getKeyName());
+				diagramRefList.add(info);
+			}
+				
+			diagram.getChildren().add(archiDiagramSpecificObject);
+			archiDiagramObjects.put(archiDiagramSpecificObject.getId(), archiDiagramSpecificObject);
+		}
+		
+		
+		//run through a second time and add children elements to parents and create relationships for diagram elements
+		createParentsAndRelationships(diagramElements, archiDiagramObjects, f);
+		
+		//also for diagram specific elements
+		createParentsAndRelationships(diagramSpecificElements, archiDiagramObjects, f);
+		
+		
+		//put the diagram in a map because we need to find it for any diagram reference elements
+		diagramModelMap.put(diagram.getId(), diagram);
+	}
+
+	private void updateDiagramModelReferences(List diagramRefList,
+			Map diagramModelMap) {
+		Iterator i = diagramRefList.iterator();
+		while(i.hasNext()) {
+			Object info[] = (Object[]) i.next();
+			IDiagramModelReference ref = (IDiagramModelReference) info[0];
+			ref.setReferencedModel((IArchimateDiagramModel) diagramModelMap.get(info[1]));
+		}
+	}
+
+		private EObject createObjectFromFeatureMap(Map objectFeatureMap) {
+			EObject object = IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)objectFeatureMap.get(VersionElementAttribute.ELEMENT_TYPE.getKeyName())));
+			((IIdentifier) object).setId((String)objectFeatureMap.get(VersionElementAttribute.ID.getKeyName()));
+			((INameable) object).setName((String)objectFeatureMap.get(VersionElementAttribute.NAME.getKeyName()));
+			((IDocumentable) object).setDocumentation((String)objectFeatureMap.get(VersionElementAttribute.DOCUMENTATION.getKeyName()));
+			
+			List elementProperties = (ArrayList)objectFeatureMap.get(VersionElementAttribute.PROPERTIES.getKeyName());
+			((IProperties) object).getProperties().addAll(elementProperties);
+			return object;
+		}
     
-    private void createModelDiagrams(IArchimateModel model, Map objects) {
-    	List diagramRefList = new ArrayList();
-    	Map diagramModelMap = new HashMap();
-    	
-    	for(Object objectKey: objects.keySet()) {
-    		String elementId = (String) objectKey;
-    		Map objectFeatureMap = (Map) objects.get(elementId);
-    		
-    		IArchimateDiagramModel diagram = (IArchimateDiagramModel)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)objectFeatureMap.get(VersionElementAttribute.ELEMENT_TYPE.getKeyName())));
-    		diagram.setId((String)objectFeatureMap.get(VersionElementAttribute.ID.getKeyName()));
-    		diagram.setName((String)objectFeatureMap.get(VersionElementAttribute.NAME.getKeyName()));
-    		diagram.setDocumentation((String)objectFeatureMap.get(VersionElementAttribute.DOCUMENTATION.getKeyName()));
-    		
-    		List elementProperties = (ArrayList)objectFeatureMap.get(VersionElementAttribute.PROPERTIES.getKeyName());
-    		diagram.getProperties().addAll(elementProperties);
-    		
-    		diagram.setConnectionRouterType(this.getSafeFeatureValue(objectFeatureMap, VersionDiagramFeatureAttribute.DIAGRAM_CONNECTION_ROUTER.getKeyName()));
-
-    		
-    		//first handle diagram elements
-    		ArchimateFactory f = new ArchimateFactory();
-    		Map diagramElements = (Map)objectFeatureMap.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_MAP.getKeyName());
-    		Map<String, Object> archiDiagramObjects = new HashMap();
-    		
-    		for(Object objectId: diagramElements.keySet()) {
-    			Map diagramElement = (Map) diagramElements.get(objectId);
-    			IDiagramModelArchimateObject archiDiagramObject = f.createDiagramModelArchimateObject();
-    			
-    			archiDiagramObject.setId((String) objectId);
-    			archiDiagramObject.setArchimateElement((IArchimateElement)modelElements.get((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_OBJECT_ID.getKeyName())));
-    			archiDiagramObject.setBounds(
-    					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_X.getKeyName()), 
-    					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_Y.getKeyName()), 
-    					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_WIDTH.getKeyName()), 
-    					this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_HEIGHT.getKeyName()));
- 
-    			archiDiagramObject.setFillColor((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FILL_COLOUR.getKeyName()));
-    			archiDiagramObject.setFont((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT.getKeyName()));
-    			archiDiagramObject.setFontColor((String)diagramElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT_COLOUR.getKeyName()));
-    			archiDiagramObject.setTextAlignment(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_ALIGNMENT.getKeyName()));
-    			archiDiagramObject.setTextPosition(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_POSITION.getKeyName()));
-    			archiDiagramObject.setType(this.getSafeFeatureValue(diagramElement, VersionDiagramFeatureAttribute.ELEMENT_REPRESENTATION_TYPE.getKeyName()));
-    			
-    			diagram.getChildren().add(archiDiagramObject);
-    			archiDiagramObjects.put((String)objectId, archiDiagramObject);
-    		}
-    		
-
-
-    		//Now handle diagram specific elements
-    		Map diagramSpecificElements = (Map)objectFeatureMap.get(VersionDiagramFeatureAttribute.DIAGRAM_SPECIFIC_OBJECT_MAP.getKeyName());
-    		Map<String, IDiagramModelObject> archiDiagramSpecificObjects = new HashMap();
-    		
-    		for(Object objectId: diagramSpecificElements.keySet()) {
-    			Map diagramSpecificElement = (Map) diagramSpecificElements.get(objectId);
-    			IDiagramModelObject archiDiagramSpecificObject = (IDiagramModelObject)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_TYPE.getKeyName())));
-    			archiDiagramSpecificObject.setId((String)objectId);
-    			archiDiagramSpecificObject.setBounds(
-    					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_X.getKeyName()), 
-    					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_Y.getKeyName()), 
-    					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_WIDTH.getKeyName()), 
-    					this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_BOUNDS_HEIGHT.getKeyName()));
-    			
-    			archiDiagramSpecificObject.setFillColor((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FILL_COLOUR.getKeyName()));
-    			archiDiagramSpecificObject.setFont((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT.getKeyName()));
-    			archiDiagramSpecificObject.setFontColor((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.ELEMENT_FONT_COLOUR.getKeyName()));
-    			archiDiagramSpecificObject.setTextAlignment(this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_ALIGNMENT.getKeyName()));
-    			//TODO something not right with text alignment
-    			archiDiagramSpecificObject.setTextPosition(this.getSafeFeatureValue(diagramSpecificElement, VersionDiagramFeatureAttribute.ELEMENT_TEXT_POSITION.getKeyName()));
-    			archiDiagramSpecificObject.setName((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_NAME.getKeyName()));
-    			
-    			if(archiDiagramSpecificObject instanceof IDiagramModelGroup)
-    				 ((IDocumentable) archiDiagramSpecificObject).setDocumentation((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_DOCUMENTATION.getKeyName()));
-    			else if (archiDiagramSpecificObject instanceof IDiagramModelNote)
-    				 ((ITextContent) archiDiagramSpecificObject).setContent((String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_OBJECT_DOCUMENTATION.getKeyName()));
-    			//if it's a diagram reference we need to add it to a list so we can update it after we've gone through all the diagrams
-    			else if (archiDiagramSpecificObject instanceof IDiagramModelReference)
-    			{
-    				Object[] info = new Object[2];
-    				info[0] = (IDiagramModelReference) archiDiagramSpecificObject;
-    				info[1] = (String)diagramSpecificElement.get(VersionDiagramFeatureAttribute.DIAGRAM_REFERENCE_ID.getKeyName());
-    				diagramRefList.add(info);
-    			}
-    				
-    			diagram.getChildren().add(archiDiagramSpecificObject);
-    			archiDiagramObjects.put(archiDiagramSpecificObject.getId(), archiDiagramSpecificObject);
-    		}
-    		
-    		
-    		//run through a second time and add children elements to parents and create relationships for diagram elements
-    		createParentsAndRelationships(diagramElements, archiDiagramObjects, f);
-    		
-    		//also for diagram specific elements
-    		createParentsAndRelationships(diagramSpecificElements, archiDiagramObjects, f);
-    		
-    		String folderString = (String)objectFeatureMap.get(VersionElementAttribute.FOLDER_PATH.getKeyName());
-    		IFolder typeFolder = model.getDefaultFolderForElement(diagram);
-    		
-    		//handle folders if needs be
-    		handleFolders(folderString, typeFolder, diagram);	
-    		
-    		//put the diagram in a map because we need to find it for any diagram reference elements
-    		diagramModelMap.put(diagram.getId(), diagram);
-    		
-    	}
-    	
-    	//The last thing we need to do is update any diagram references with the diagram they are referencing
-    	Iterator i = diagramRefList.iterator();
-    	while(i.hasNext()) {
-    		Object info[] = (Object[]) i.next();
-    		IDiagramModelReference ref = (IDiagramModelReference) info[0];
-    		ref.setReferencedModel((IArchimateDiagramModel) diagramModelMap.get(info[1]));
-    	}
-    }
     
+    private IFolder handleRelationshipSpecifics(IFolder derivedRelations,
+				Map objectFeatureMap, IRelationship relationship, IArchimateModel model) {
+			//relationships
+			IArchimateElement source = (IArchimateElement) modelElements.get(objectFeatureMap.get(VersionRelationshipAttribute.SOURCE_ELEMENT.getKeyName()));
+			System.out.printf("source=%s\n", source);
+			relationship.setSource(source);
+			
+			IArchimateElement target = (IArchimateElement) modelElements.get(objectFeatureMap.get(VersionRelationshipAttribute.TARGET_ELEMENT.getKeyName()));
+			relationship.setTarget(target);
+			
+			IFolder typeFolder = model.getDefaultFolderForElement(relationship);
+			String relationType = (String)objectFeatureMap.get(VersionElementAttribute.TYPE.getKeyName());
+			if(relationType.equals("derived")) {
+				typeFolder = derivedRelations;
+			}
+			
+			//relationship type specific
+			if (relationship instanceof IAccessRelationship) {
+				IAccessRelationship accessRel = (IAccessRelationship) relationship;
+				if ((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName()) !=null && ((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName())).containsKey(VersionRelationshipAttribute.ACCESS_TYPE.getKeyName())) {
+					int accessType = Integer.parseInt((String)((Map)objectFeatureMap.get(VersionRelationshipAttribute.ADDITIONAL_ATTRIBUTES.getKeyName())).get(VersionRelationshipAttribute.ACCESS_TYPE.getKeyName()));
+					accessRel.setAccessType(accessType);
+				}
+			}
+			return typeFolder;
+		}
     
     private void createModelProperty(IArchimateModel model, String key, String value) {
 		ArchimateFactory f = new ArchimateFactory();
